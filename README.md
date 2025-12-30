@@ -64,6 +64,32 @@ Scans for networks and opens the selection menu. If you select a secure network,
 ```
 Shows details about your current connection (SSID, Signal Strength, IP Address) and asks for confirmation before disconnecting.
 
+### Saved Networks
+```bash
+./gum-wifi.sh saved
+```
+List all saved WiFi profiles. You can select one to detail (show QR code & password) or forget/delete it.
+
+### Share WiFi (QR Code)
+```bash
+./gum-wifi.sh share
+```
+Generates a QR code for your current connection. Friends can scan it to join instantly!
+It also displays the plaintext password for easy sharing.
+
+### Speed Test
+```bash
+./gum-wifi.sh speed
+```
+Runs a simple internet speed test. It will prompt to install `speedtest-cli` if missing. Displays detailed client, server, and speed stats.
+
+### Radio Toggle
+```bash
+./gum-wifi.sh radio
+```
+Quickly enable or disable the WiFi hardware.
+
+
 ### Help
 ```bash
 ./gum-wifi.sh --help

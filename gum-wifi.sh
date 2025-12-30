@@ -14,17 +14,8 @@ check_dependencies() {
 	if ! command -v gum &> /dev/null;
 	then
 		echo "Gum is not installed. Detecting OS..."
-		if [ -f /etc/os-release ];
-		then
-			. /etc/os-release
-			OS=$ID
-		elif [[ "$OSTYPE" == "darwin"* ]];
-		then
-			OS="macos"
-		else
-			OS="unknown"
-		fi
-
+		detect_os
+		
 		echo "Detected OS: $OS"
 		read -p "Would you like to install 'gum' now? (y/n) > " -n 1 -r
 		echo
@@ -34,41 +25,67 @@ check_dependencies() {
 			exit 1
 		fi
 
-		case $OS in
-			arch|manjaro|endeavouros)
-				sudo pacman -S gum --noconfirm
-				;;
-			macos)
-				if command -v brew &> /dev/null;
-				then
-					brew install gum
-				else
-					echo "Homebrew not found. Please install gum manually."
-					exit 1
-				fi
-				;;
-			ubuntu|debian|pop)
-				# Charmbracelet requires adding a repo for Debian variants
+		install_package "gum"
+	fi
+}
+
+detect_os() {
+	if [ -f /etc/os-release ];
+	then
+		. /etc/os-release
+		OS=$ID
+	elif [[ "$OSTYPE" == "darwin"* ]];
+	then
+		OS="macos"
+	else
+		OS="unknown"
+	fi
+}
+
+install_package() {
+	PACKAGE=$1
+	case $OS in
+		arch|manjaro|endeavouros)
+			sudo pacman -S "$PACKAGE" --noconfirm
+			;;
+		macos)
+			if command -v brew &> /dev/null;
+			then
+				brew install "$PACKAGE"
+			else
+				echo "Homebrew not found. Please install $PACKAGE manually."
+				exit 1
+			fi
+			;;
+		ubuntu|debian|pop)
+			# Specific handling for gum repo only if package is gum
+			if [ "$PACKAGE" == "gum" ]; then
 				echo "Installing dependencies for Charm repo..."
 				sudo mkdir -p /etc/apt/keyrings
 				curl -fsSL https://repo.charm.sh/apt/gpg.key | sudo gpg --dearmor -o /etc/apt/sources.list.d/charm.list
 				sudo apt update && sudo apt install gum -y
-				;;
-			fedora)
+			else
+				sudo apt install "$PACKAGE" -y
+			fi
+			;;
+		fedora)
+			if [ "$PACKAGE" == "gum" ]; then
 				echo '[charm]
 				name=Charm
 				baseurl=https://repo.charm.sh/yum/
 				enabled=1
 				gpgcheck=1
 				gpgkey=https://repo.charm.sh/yum/gpg.key' | sudo tee /etc/yum.repos.d/charm.repo
-				sudo dnf install gum -y
-				;;
-			*)
-				echo "Could not detect package manager. Please install 'gum' manually (https://github.com/charmbracelet/gum)."
+			fi
+			sudo dnf install "$PACKAGE" -y
+			;;
+		*)
+			echo "Could not detect package manager. Please install '$PACKAGE' manually."
+			if [ "$PACKAGE" == "gum" ]; then
 				exit 1
-				;;
-		esac
-	fi
+			fi
+			;;
+	esac
 }
 
 # Run the check
@@ -105,6 +122,10 @@ show_help() {
 	echo "Commands:"
 	echo "  connect     Scan and connect to a WiFi network"
 	echo "  disconnect  Disconnect from the current WiFi network"
+	echo "  saved       Manage saved WiFi profiles (Forget)"
+	echo "  share       Show QR code for current connection"
+	echo "  speed       Run an internet speed test"
+	echo "  radio       Toggle WiFi radio on/off"
 	echo
 	echo "Flags:"
 	echo "  -h, --help  Show this help message"
@@ -245,6 +266,189 @@ check_captive_portal() {
 	fi
 }
 
+manage_saved() {
+	gum style --border normal --margin "1" --padding "1 2" --border-foreground "$COLOR_INFO" "Manage Saved Networks"
+
+	# List saved connections (Active or not)
+	# Fields: NAME, UUID, TYPE, TIMESTAMP
+	# Filter for 802-11-wireless
+	SAVED_LIST=$(nmcli -t -f NAME,UUID,TYPE,TIMESTAMP connection show | grep ':802-11-wireless:' | sort -t: -k4 -r)
+
+	if [ -z "$SAVED_LIST" ]; then
+		log_info "No saved WiFi profiles found."
+		exit 0
+	fi
+
+	# Format for display: "NAME (Last used: TIMESTAMP)"
+	# We use awk to pretty print. note: nmcli timestamp is unix epoch or 0
+	# actually nmcli timestamp might be a long int. 
+	# Let's just show the Name for simplicity first, maybe UUID as value.
+	
+	# Create a list for gum choose
+	# We replace colons in names to avoid gum parsing issues if we were doing key:value, but simple list is fine.
+	# We'll display just the Names.
+	
+	SELECTED_NAME=$(echo "$SAVED_LIST" | cut -d: -f1 | gum choose --header "Select a profile to manage" --height 15 --cursor.foreground "$COLOR_INFO")
+
+	if [ -z "$SELECTED_NAME" ]; then
+		exit 0
+	fi
+
+	# Get UUID for the selected name (handle duplicates by picking most recent? nmcli sort should help)
+	# We'll just pick the first one matching the name
+	UUID=$(echo "$SAVED_LIST" | grep "^$SELECTED_NAME:" | head -n1 | cut -d: -f2)
+
+	# Actions
+	ACTION=$(gum choose "Show Password" "Forget/Delete" "Cancel" --header "Action for '$SELECTED_NAME'")
+
+	if [ "$ACTION" == "Forget/Delete" ]; then
+		if gum confirm "Permanently delete '$SELECTED_NAME'?"; then
+			if gum spin --title "Deleting..." -- nmcli connection delete "$UUID"; then
+				log_success "Deleted profile '$SELECTED_NAME'"
+			else
+				log_error "Failed to delete profile."
+			fi
+		fi
+	elif [ "$ACTION" == "Show Password" ]; then
+		# Retrieve details
+		PASS=$(nmcli -s -g 802-11-wireless-security.psk connection show "$UUID" 2>/dev/null)
+		SSID=$(nmcli -g 802-11-wireless.ssid connection show "$UUID")
+		
+		if [ -n "$PASS" ]; then
+			# Generate QR if possible
+			if command -v qrencode &> /dev/null && [ -n "$SSID" ]; then
+				gum style --foreground 252 "QR Code for '$SSID':"
+				qrencode -t ANSIUTF8 "WIFI:S:$SSID;T:WPA;P:$PASS;;"
+				echo
+			fi
+			
+			gum style --border normal --padding "0 1" --border-foreground "$COLOR_SUCCESS" "Password: $PASS"
+		else
+			log_error "Could not retrieve password (permissions?)"
+		fi
+	fi
+}
+
+share_wifi() {
+	gum style --border normal --margin "1" --padding "1 2" --border-foreground "$COLOR_INFO" "Share WiFi"
+
+	# Check for active connection
+	ACTIVE=$(nmcli -t -f NAME connection show --active | head -n1)
+	if [ -z "$ACTIVE" ]; then
+		log_error "Not connected to any network."
+		exit 1
+	fi
+
+	# Attempt to retrieve credentials
+	log_info "Retrieving credentials for '$ACTIVE'..."
+	SECRETS=$(nmcli -s -g 802-11-wireless-security.psk connection show "$ACTIVE" 2>/dev/null)
+	SSID=$(nmcli -g 802-11-wireless.ssid connection show "$ACTIVE")
+
+	# Mode 1: Custom Layout using qrencode (Preferred for "Password Below")
+	if command -v qrencode &> /dev/null && [ -n "$SECRETS" ]; then
+		# Generate QR
+        # WPA format: WIFI:S:MySSID;T:WPA;P:MyPass;;
+        qrencode -t ANSIUTF8 "WIFI:S:$SSID;T:WPA;P:$SECRETS;;"
+		
+		# Show Password Below
+		echo
+		gum style --border normal --padding "0 1" --border-foreground "$COLOR_SUCCESS" "Password: $SECRETS"
+		
+	# Mode 2: Native nmcli QR (Fallback)
+	# This usually puts password above, but it's a solid fallback if qrencode is missing or secrets hidden.
+	elif nmcli device wifi show-password &> /dev/null; then
+		nmcli device wifi show-password
+		
+	else
+		log_error "Could not generate QR code."
+		log_info "Ensure 'qrencode' is installed or you have permission to view connection secrets."
+		if [ -z "$SECRETS" ]; then
+			log_info "Hint: 'nmcli' could not retrieve the password."
+		fi
+		exit 1
+	fi
+}
+
+run_speedtest() {
+	gum style --border normal --margin "1" --padding "1 2" --border-foreground "$COLOR_INFO" "Speed Test"
+
+	# Check if speedtest-cli is installed
+	if ! command -v speedtest-cli &> /dev/null; then
+		if gum confirm "speedtest-cli is not installed. Install it?"; then
+			detect_os
+			if [ -z "$OS" ]; then detect_os; fi # Ensure OS is set
+			install_package "speedtest-cli"
+		fi
+	fi
+
+	# Final check
+	if ! command -v speedtest-cli &> /dev/null; then
+		log_error "'speedtest-cli' is required. Exiting."
+		exit 1
+	fi
+
+	log_info "Initialize speedtest-cli..."
+	
+	TMP_SPEED=$(mktemp)
+	
+	# Run speedtest-cli and live stream to stdout (tee) while capturing to file
+	# We rely on standard output format of speedtest-cli
+	if ! speedtest-cli | tee "$TMP_SPEED"; then
+		rm "$TMP_SPEED"
+		log_error "Speed test failed."
+		exit 1
+	fi
+	
+	echo # Newline after progress dots
+
+	# Parse Output
+	CLIENT=$(grep "Testing from" "$TMP_SPEED" | sed 's/Testing from //')
+	SERVER_LINE=$(grep "Hosted by" "$TMP_SPEED")
+	SERVER=$(echo "$SERVER_LINE" | cut -d: -f1 | sed 's/Hosted by //')
+	PING=$(echo "$SERVER_LINE" | cut -d: -f2 | xargs)
+	
+	DOWNLOAD=$(grep "Download:" "$TMP_SPEED" | cut -d: -f2 | xargs)
+	UPLOAD=$(grep "Upload:" "$TMP_SPEED" | cut -d: -f2 | xargs)
+	
+	rm "$TMP_SPEED"
+
+	if [ -n "$DOWNLOAD" ]; then
+		gum style \
+			--border double \
+			--margin "1" \
+			--padding "1 2" \
+			--border-foreground "$COLOR_SUCCESS" \
+			"Client:   $(gum style --foreground "$COLOR_INFO" "$CLIENT")" \
+			"Server:   $(gum style --foreground "$COLOR_INFO" "$SERVER")" \
+			"Ping:     $(gum style --foreground "$COLOR_SUCCESS" "$PING")" \
+			"Download: $(gum style --bold --foreground "$COLOR_SUCCESS" "$DOWNLOAD")" \
+			"Upload:   $(gum style --bold --foreground "$COLOR_SUCCESS" "$UPLOAD")"
+	else
+		log_error "Could not parse results."
+	fi
+}
+
+toggle_radio() {
+	gum style --border normal --margin "1" --padding "1 2" --border-foreground "$COLOR_INFO" "WiFi Radio"
+
+	STATUS=$(nmcli radio wifi)
+	log_info "Current status: $STATUS"
+
+	CHOICE=$(gum choose "Enable" "Disable" "Cancel" --header "Set WiFi Radio")
+
+	case "$CHOICE" in
+		"Enable")
+			gum spin --title "Enabling WiFi..." -- nmcli radio wifi on
+			log_success "WiFi Enabled"
+			;;
+		"Disable")
+			gum spin --title "Disabling WiFi..." -- nmcli radio wifi off
+			log_success "WiFi Disabled"
+			;;
+	esac
+}
+
+
 disconnect_wifi() {
 	# Find active wifi connection with details
 	# Fields: NAME, UUID, TYPE, DEVICE
@@ -321,6 +525,18 @@ case "$1" in
 		;;
 	"disconnect")
 		disconnect_wifi
+		;;
+	"saved")
+		manage_saved
+		;;
+	"share")
+		share_wifi
+		;;
+	"speed")
+		run_speedtest
+		;;
+	"radio")
+		toggle_radio
 		;;
 	"-h"|"--help")
 		show_help
