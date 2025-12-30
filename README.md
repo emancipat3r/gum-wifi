@@ -36,7 +36,7 @@ A beautiful, interactive WiFi manager for the command line, built with [Gum](htt
 
 1. Clone the repository:
    ```bash
-  git clone https://github.com/emancipat3r/gum-wifi.git
+   git clone git@github.com:emancipat3r/gum-wifi.git
    cd gum-wifi
    ```
 
