@@ -395,7 +395,7 @@ manage_saved() {
 
 	if [ -z "$SAVED_LIST" ]; then
 		log_info "No saved WiFi profiles found."
-		exit 0
+		return 0
 	fi
 
 	DISPLAY_LIST=""
@@ -414,7 +414,7 @@ manage_saved() {
 	SELECTED_DISPLAY=$(echo "$DISPLAY_LIST" | awk -F '__UUID__' '{print $1}' | gum choose --header "Select a profile to manage" --height 15 --cursor.foreground "$COLOR_INFO")
 
 	if [ -z "$SELECTED_DISPLAY" ]; then
-		exit 0
+		return 0
 	fi
 
 	UUID=$(echo "$DISPLAY_LIST" | grep -F "$SELECTED_DISPLAY__UUID__" | awk -F '__UUID__' '{print $2}' | head -n1 || true)
@@ -451,7 +451,7 @@ share_wifi() {
 	ACTIVE=$(nmcli -t -f NAME,TYPE connection show --active | grep -E ':(802-11-wireless|wifi)$' | cut -d: -f1 | head -n1 || true)
 	if [ -z "$ACTIVE" ]; then
 		log_error "Not connected to any wireless network."
-		exit 1
+		return 1
 	fi
 
 	# Attempt to retrieve credentials
@@ -602,7 +602,7 @@ disconnect_wifi() {
 
 	if [ -z "$ACTIVE_CONN_INFO" ]; then
 		log_info "No active WiFi connection found."
-		exit 0
+		return 0
 	fi
 
 	# Parse Info
@@ -653,7 +653,7 @@ disconnect_wifi() {
 			log_success "Disconnected from $DISPLAY_NAME"
 		else
 			log_error "Failed to disconnect."
-			exit 1
+			return 1
 		fi
 	else
 		log_info "Disconnection cancelled."
@@ -686,6 +686,7 @@ case "${1:-}" in
 		;;
 	*)
 		show_help
-		exit 1
+		return 1
 		;;
 esac
+exit $?
