@@ -334,22 +334,30 @@ connect_wifi() {
 		
 		if [ -z "$PASSWORD" ]; then
 			log_info "No password provided."
-			exit 1
+			return 1
 		fi
 		
-		# Retry with provided password
-		if gum spin --title "Connecting to $DISPLAY_NAME..." -- nmcli device wifi connect "$TARGET" password "$PASSWORD"; then
+		# Retry with provided password via secure temporary profile
+		TMP_PROFILE="gumwifi-$(date +%s)"
+		if ! nmcli connection add type wifi con-name "$TMP_PROFILE" ifname '*' ssid "$SSID" \
+			-- wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$PASSWORD" >/dev/null; then
+			log_error "Failed to create connection profile."
+			return 1
+		fi
+		
+		if gum spin --title "Connecting to $DISPLAY_NAME..." -- nmcli connection up "$TMP_PROFILE"; then
 			log_success "Connected to $DISPLAY_NAME"
 			check_captive_portal
 			return 0
 		else
+			nmcli connection delete "$TMP_PROFILE" >/dev/null 2>&1 || true
 			log_error "Failed to connect."
-			exit 1
+			return 1
 		fi
 	else
 		# Open network failed or other error
 		log_error "Failed to connect."
-		exit 1
+		return 1
 	fi
 }
 
