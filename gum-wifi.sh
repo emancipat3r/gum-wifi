@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 
 # --- 1. Dependency check & auto-install ---
 
@@ -76,7 +77,7 @@ detect_os() {
 }
 
 install_package() {
-	PACKAGE=$1
+	PACKAGE=${1:-}
 
 	PM=""
 	if command -v apt-get &> /dev/null; then
@@ -368,7 +369,7 @@ manage_saved() {
 	# List saved connections (Active or not)
 	# Fields: NAME, UUID, TYPE, TIMESTAMP
 	# Filter for 802-11-wireless
-	SAVED_LIST=$(nmcli -t -f NAME,UUID,TYPE,TIMESTAMP connection show | grep ':802-11-wireless:' | sort -t: -k4 -r)
+	SAVED_LIST=$(nmcli -t -f NAME,UUID,TYPE,TIMESTAMP connection show | grep ':802-11-wireless:' | sort -t: -k4 -r || true)
 
 	if [ -z "$SAVED_LIST" ]; then
 		log_info "No saved WiFi profiles found."
@@ -394,7 +395,7 @@ manage_saved() {
 		exit 0
 	fi
 
-	UUID=$(echo "$DISPLAY_LIST" | grep -F "$SELECTED_DISPLAY__UUID__" | awk -F '__UUID__' '{print $2}' | head -n1)
+	UUID=$(echo "$DISPLAY_LIST" | grep -F "$SELECTED_DISPLAY__UUID__" | awk -F '__UUID__' '{print $2}' | head -n1 || true)
 	SELECTED_NAME=$(echo "$SELECTED_DISPLAY" | sed 's/ (.*//')
 
 	# Actions
@@ -425,7 +426,7 @@ share_wifi() {
 	print_header "Share WiFi"
 
 	# Check for active connection
-	ACTIVE=$(nmcli -t -f NAME,TYPE connection show --active | grep -E ':(802-11-wireless|wifi)$' | cut -d: -f1 | head -n1)
+	ACTIVE=$(nmcli -t -f NAME,TYPE connection show --active | grep -E ':(802-11-wireless|wifi)$' | cut -d: -f1 | head -n1 || true)
 	if [ -z "$ACTIVE" ]; then
 		log_error "Not connected to any wireless network."
 		exit 1
@@ -476,13 +477,13 @@ run_speedtest() {
 	echo # Newline after progress dots
 
 	# Parse Output
-	CLIENT=$(grep "Testing from" "$TMP_SPEED" | sed 's/^Testing from //; s/\.\.\.$//')
-	SERVER_LINE=$(grep "Hosted by" "$TMP_SPEED")
+	CLIENT=$(grep "Testing from" "$TMP_SPEED" | sed 's/^Testing from //; s/\.\.\.$//' || true)
+	SERVER_LINE=$(grep "Hosted by" "$TMP_SPEED" || true)
 	SERVER=$(echo "$SERVER_LINE" | sed 's/^Hosted by //; s/: .*//')
 	PING=$(echo "$SERVER_LINE" | sed 's/.*: //')
 	
-	DOWNLOAD=$(grep "Download:" "$TMP_SPEED" | sed 's/^Download: //')
-	UPLOAD=$(grep "Upload:" "$TMP_SPEED" | sed 's/^Upload: //')
+	DOWNLOAD=$(grep "Download:" "$TMP_SPEED" | sed 's/^Download: //' || true)
+	UPLOAD=$(grep "Upload:" "$TMP_SPEED" | sed 's/^Upload: //' || true)
 	
 	rm "$TMP_SPEED"
 
@@ -528,7 +529,7 @@ disconnect_wifi() {
 	# Fields: NAME, UUID, TYPE, DEVICE
 	# We include UUID because NAME might be empty or duplicate.
 	# We fallback to grep for both '802-11-wireless' and simple 'wifi' as type can vary.
-	ACTIVE_CONN_INFO=$(nmcli -t -f NAME,UUID,TYPE,DEVICE connection show --active | grep -E ':(802-11-wireless|wifi):' | head -n1)
+	ACTIVE_CONN_INFO=$(nmcli -t -f NAME,UUID,TYPE,DEVICE connection show --active | grep -E ':(802-11-wireless|wifi):' | head -n1 || true)
 
 	if [ -z "$ACTIVE_CONN_INFO" ]; then
 		log_info "No active WiFi connection found."
@@ -552,11 +553,11 @@ disconnect_wifi() {
 	# Get Device Specifics (Signal, Rate, IP)
 	# Get IP Address
 	# Output format: IP4.ADDRESS[1]:192.168.1.5/24
-	IP_ADDR=$(nmcli -t -f IP4.ADDRESS device show "$DEVICE" 2>/dev/null | grep 'IP4.ADDRESS' | cut -d: -f2 | head -n1)
+	IP_ADDR=$(nmcli -t -f IP4.ADDRESS device show "$DEVICE" 2>/dev/null | grep 'IP4.ADDRESS' | cut -d: -f2 | head -n1 || true)
 
 	# Get Signal and Rate from wifi list (more reliable than device show for some versions)
 	# Output format: *:SSID:SIGNAL:RATE
-	WIFI_INFO=$(nmcli -t -f IN-USE,SSID,SIGNAL,RATE device wifi list | grep '^\*' | head -n1)
+	WIFI_INFO=$(nmcli -t -f IN-USE,SSID,SIGNAL,RATE device wifi list | grep '^\*' | head -n1 || true)
 	SIGNAL=$(echo "$WIFI_INFO" | cut -d: -f3)
 	RATE=$(echo "$WIFI_INFO" | cut -d: -f4)
 
@@ -579,8 +580,7 @@ disconnect_wifi() {
 
 	if gum confirm "Disconnect from '$DISPLAY_NAME'?"; then
 		# Use UUID to disconnect, it is safer than Name (especially if empty)
-		gum spin --title "Disconnecting..." -- nmcli connection down "$UUID"
-		if [ $? -eq 0 ]; then
+		if gum spin --title "Disconnecting..." -- nmcli connection down "$UUID"; then
 			log_success "Disconnected from $DISPLAY_NAME"
 		else
 			log_error "Failed to disconnect."
@@ -593,7 +593,7 @@ disconnect_wifi() {
 
 # --- Main CLI Logic ---
 
-case "$1" in
+case "${1:-}" in
 	"connect")
 		connect_wifi
 		;;
