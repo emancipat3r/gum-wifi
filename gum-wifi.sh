@@ -447,31 +447,76 @@ share_wifi() {
 run_speedtest() {
 	print_header "Speed Test"
 
-	# Check if speedtest-cli is installed
-	if ! command -v speedtest-cli &> /dev/null; then
-		if gum confirm "speedtest-cli is not installed. Install it?"; then
-			detect_os
-			if [ -z "$OS" ]; then detect_os; fi # Ensure OS is set
-			install_package "speedtest-cli"
+	if command -v speedtest &> /dev/null; then
+		log_info "Initialize Ookla speedtest..."
+		if command -v jq &> /dev/null; then
+			TMP_SPEED=$(mktemp)
+			if ! speedtest --accept-license --accept-gdpr -f json > "$TMP_SPEED" 2>/dev/null; then
+				rm "$TMP_SPEED"
+				log_error "Speed test failed."
+				return 1
+			fi
+			CLIENT=$(jq -r '.isp' "$TMP_SPEED" || true)
+			SERVER=$(jq -r '.server.name' "$TMP_SPEED" || true)
+			PING=$(jq -r '.ping.latency' "$TMP_SPEED" | sed 's/$/ ms/' || true)
+			DOWNLOAD_VAL=$(jq -r '.download.bandwidth' "$TMP_SPEED" || true)
+			DOWNLOAD=$(awk "BEGIN {printf \"%.2f Mbit/s\", $DOWNLOAD_VAL * 8 / 1000000}" || true)
+			UPLOAD_VAL=$(jq -r '.upload.bandwidth' "$TMP_SPEED" || true)
+			UPLOAD=$(awk "BEGIN {printf \"%.2f Mbit/s\", $UPLOAD_VAL * 8 / 1000000}" || true)
+			rm "$TMP_SPEED"
+		else
+			TMP_SPEED=$(mktemp)
+			if ! speedtest --accept-license --accept-gdpr -f human-readable > "$TMP_SPEED" 2>/dev/null; then
+				rm "$TMP_SPEED"
+				log_error "Speed test failed."
+				return 1
+			fi
+			CLIENT=$(grep "ISP:" "$TMP_SPEED" | sed 's/^.*ISP: //' || true)
+			SERVER=$(grep "Server:" "$TMP_SPEED" | sed 's/^.*Server: //' || true)
+			PING=$(grep "Idle Latency:" "$TMP_SPEED" | grep -o '[0-9.]* ms' | head -n1 || true)
+			DOWNLOAD=$(grep "Download:" "$TMP_SPEED" | sed 's/.*Download: //' || true)
+			UPLOAD=$(grep "Upload:" "$TMP_SPEED" | sed 's/.*Upload: //' || true)
+			rm "$TMP_SPEED"
+		fi
+
+		if [ -n "$DOWNLOAD" ]; then
+			gum style \
+				--border double \
+				--margin "1" \
+				--padding "1 2" \
+				--border-foreground "$COLOR_SUCCESS" \
+				"Client:   $(gum style --foreground "$COLOR_INFO" "$CLIENT")" \
+				"Server:   $(gum style --foreground "$COLOR_INFO" "$SERVER")" \
+				"Ping:     $(gum style --foreground "$COLOR_SUCCESS" "$PING")" \
+				"Download: $(gum style --bold --foreground "$COLOR_SUCCESS" "$DOWNLOAD")" \
+				"Upload:   $(gum style --bold --foreground "$COLOR_SUCCESS" "$UPLOAD")"
+			return 0
+		else
+			log_error "Could not parse results."
+			return 1
 		fi
 	fi
 
-	# Final check
+	# Fallback to speedtest-cli
 	if ! command -v speedtest-cli &> /dev/null; then
-		log_error "'speedtest-cli' is required. Exiting."
-		exit 1
+		if gum confirm "Ookla 'speedtest' is not installed. View official install instructions?"; then
+			echo "For optimal results, please install Ookla 'speedtest' via official instructions:"
+			echo "  https://www.speedtest.net/apps/cli"
+			return 1
+		else
+			log_error "'speedtest' is required. Exiting."
+			return 1
+		fi
 	fi
 
 	log_info "Initialize speedtest-cli..."
 	
 	TMP_SPEED=$(mktemp)
 	
-	# Run speedtest-cli and live stream to stdout (tee) while capturing to file
-	# We rely on standard output format of speedtest-cli
 	if ! speedtest-cli | tee "$TMP_SPEED"; then
 		rm "$TMP_SPEED"
 		log_error "Speed test failed."
-		exit 1
+		return 1
 	fi
 	
 	echo # Newline after progress dots
@@ -498,8 +543,10 @@ run_speedtest() {
 			"Ping:     $(gum style --foreground "$COLOR_SUCCESS" "$PING")" \
 			"Download: $(gum style --bold --foreground "$COLOR_SUCCESS" "$DOWNLOAD")" \
 			"Upload:   $(gum style --bold --foreground "$COLOR_SUCCESS" "$UPLOAD")"
+		return 0
 	else
 		log_error "Could not parse results."
+		return 1
 	fi
 }
 
