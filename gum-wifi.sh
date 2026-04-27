@@ -3,30 +3,63 @@
 # --- 1. Dependency check & auto-install ---
 
 check_dependencies() {
-	# Check for NetworkManager first
-	if ! command -v nmcli &> /dev/null;
-	then
-		echo "Error: NetworkManager (nmcli) is not installed."
+	detect_os
+
+	if [ "$OS" == "macos" ]; then
+		echo "macOS is not supported because it does not use nmcli."
 		exit 1
 	fi
 
-	# Check for gum
-	if ! command -v gum &> /dev/null;
-	then
-		echo "Gum is not installed. Detecting OS..."
-		detect_os
-		
-		echo "Detected OS: $OS"
-		read -p "Would you like to install 'gum' now? (y/n) > " -n 1 -r
-		echo
-		if [[ ! $REPLY =~ ^[Yy]$ ]];
-		then
-			echo "Gum is required for this script. Exiting..."
-			exit 1
-		fi
+	nmcli_installed=1
+	gum_installed=1
 
-		install_package "gum"
+	# Check for NetworkManager first
+	if ! command -v nmcli &> /dev/null; then
+		nmcli_installed=0
+	fi	
+
+	if ! command -v gum &> /dev/null; then
+		gum_installed=0
 	fi
+
+	case ${nmcli_installed}${gum_installed} in
+		"00")
+			echo "nmcli and gum are not installed."
+			read -p "Would you like to install nmcli and gum now? (y/n) > " -n 1 -r
+			echo
+			if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+				echo "nmcli and gum are required for script execution. Exiting..."
+				exit 1
+			fi
+
+			install_package "nmcli"
+			install_package "gum"
+			;;
+		"01")
+			echo "nmcli is not installed."
+			read -p "Would you like to install nmcli now? (y/n) > " -n 1 -r
+			echo
+			if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+				echo "nmcli is required for script execution. Exiting..."
+				exit 1
+			fi
+
+			install_package "nmcli"
+			;;
+		"10")
+			echo "Gum is not installed."
+			read -p "Would you like to install gum now? (y/n) > " -n 1 -r
+			echo
+			if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+				echo "Gum is required for script execution. Exiting..."
+				exit 1
+			fi
+
+			install_package "gum"
+			;;
+		*)
+			;;
+	esac
 }
 
 detect_os() {
@@ -44,47 +77,82 @@ detect_os() {
 
 install_package() {
 	PACKAGE=$1
-	case $OS in
-		arch|manjaro|endeavouros)
-			sudo pacman -S "$PACKAGE" --noconfirm
-			;;
-		macos)
-			if command -v brew &> /dev/null;
-			then
-				brew install "$PACKAGE"
-			else
-				echo "Homebrew not found. Please install $PACKAGE manually."
-				exit 1
-			fi
-			;;
-		ubuntu|debian|pop)
-			# Specific handling for gum repo only if package is gum
-			if [ "$PACKAGE" == "gum" ]; then
+
+	PM=""
+	if command -v apt-get &> /dev/null; then
+		PM="apt"
+	elif command -v dnf &> /dev/null; then
+		PM="dnf"
+	elif command -v pacman &> /dev/null; then
+		PM="pacman"
+	elif command -v zypper &> /dev/null; then
+		PM="zypper"
+	elif command -v yum &> /dev/null; then
+		PM="yum"
+	elif command -v apk &> /dev/null; then
+		PM="apk"
+	fi
+
+	if [ -z "$PM" ]; then
+		echo "Could not detect package manager or OS/Distribution is not supported..."
+		exit 1
+	fi
+
+	if [ "$PACKAGE" == "nmcli" ]; then
+		case $PM in
+			apt) PACKAGE="network-manager" ;;
+			pacman|apk) PACKAGE="networkmanager" ;;
+			dnf|yum|zypper) PACKAGE="NetworkManager" ;;
+		esac
+	fi
+
+	if [ "$PACKAGE" == "gum" ]; then
+		case $PM in
+			apt)
 				echo "Installing dependencies for Charm repo..."
 				sudo mkdir -p /etc/apt/keyrings
 				curl -fsSL https://repo.charm.sh/apt/gpg.key | sudo gpg --dearmor -o /etc/apt/sources.list.d/charm.list
 				sudo apt update && sudo apt install gum -y
-			else
-				sudo apt install "$PACKAGE" -y
-			fi
-			;;
-		fedora)
-			if [ "$PACKAGE" == "gum" ]; then
+				return
+				;;
+			dnf|yum)
 				echo '[charm]
-				name=Charm
-				baseurl=https://repo.charm.sh/yum/
-				enabled=1
-				gpgcheck=1
-				gpgkey=https://repo.charm.sh/yum/gpg.key' | sudo tee /etc/yum.repos.d/charm.repo
-			fi
-			sudo dnf install "$PACKAGE" -y
-			;;
-		*)
-			echo "Could not detect package manager. Please install '$PACKAGE' manually."
-			if [ "$PACKAGE" == "gum" ]; then
-				exit 1
-			fi
-			;;
+name=Charm
+baseurl=https://repo.charm.sh/yum/
+enabled=1
+gpgcheck=1
+gpgkey=https://repo.charm.sh/yum/gpg.key' | sudo tee /etc/yum.repos.d/charm.repo
+				sudo $PM install gum -y
+				return
+				;;
+			pacman)
+				sudo pacman -S gum --noconfirm
+				return
+				;;
+			zypper)
+				echo '[charm]
+name=Charm
+baseurl=https://repo.charm.sh/yum/
+enabled=1
+gpgcheck=1
+gpgkey=https://repo.charm.sh/yum/gpg.key' | sudo tee /etc/zypp/repos.d/charm.repo
+				sudo zypper install -y gum
+				return
+				;;
+			apk)
+				# gum is in Alpine community repos
+				sudo apk add gum
+				return
+				;;
+		esac
+	fi
+
+	case $PM in
+		apt) sudo apt install "$PACKAGE" -y ;;
+		dnf|yum) sudo $PM install "$PACKAGE" -y ;;
+		pacman) sudo pacman -S "$PACKAGE" --noconfirm ;;
+		zypper) sudo zypper install -y "$PACKAGE" ;;
+		apk) sudo apk add "$PACKAGE" ;;
 	esac
 }
 
@@ -102,6 +170,32 @@ COLOR_WARN="208"	# Orange
 log_info() { gum style --foreground "$COLOR_INFO" "$1"; }
 log_success() { gum style --foreground "$COLOR_SUCCESS" "$1"; }
 log_error() { gum style --foreground "$COLOR_ERROR" "$1"; }
+log_warn() { gum style --foreground "$COLOR_WARN" "$1"; }
+
+print_header() {
+	local color="${2:-$COLOR_INFO}"
+	gum style --border normal --margin "1" --padding "1 2" --border-foreground "$color" "$1"
+}
+
+show_qr_code() {
+	local SSID="$1"
+	local PASS="$2"
+	
+	if command -v qrencode &> /dev/null && [ -n "$PASS" ]; then
+		gum style --foreground 252 "QR Code for '$SSID':"
+		qrencode -t ANSIUTF8 "WIFI:S:$SSID;T:WPA;P:$PASS;;"
+		echo
+		gum style --border normal --padding "0 1" --border-foreground "$COLOR_SUCCESS" "Password: $PASS"
+	elif nmcli device wifi show-password &> /dev/null; then
+		nmcli device wifi show-password
+	else
+		if [ -n "$PASS" ]; then
+			gum style --border normal --padding "0 1" --border-foreground "$COLOR_SUCCESS" "Password: $PASS"
+		else
+			log_warn "No password found or missing permissions to view it."
+		fi
+	fi
+}
 
 # --- 3. Main Logic ---
 
@@ -134,7 +228,7 @@ show_help() {
 
 connect_wifi() {
 	# Title
-	gum style --border normal --margin "1" --padding "1 2" --border-foreground "$COLOR_INFO" "WiFi Manager: Connect"
+	print_header "WiFi Manager: Connect"
 
 	# Define Header
 	# Must match awk printf below:
@@ -267,7 +361,7 @@ check_captive_portal() {
 }
 
 manage_saved() {
-	gum style --border normal --margin "1" --padding "1 2" --border-foreground "$COLOR_INFO" "Manage Saved Networks"
+	print_header "Manage Saved Networks"
 
 	# List saved connections (Active or not)
 	# Fields: NAME, UUID, TYPE, TIMESTAMP
@@ -279,24 +373,27 @@ manage_saved() {
 		exit 0
 	fi
 
-	# Format for display: "NAME (Last used: TIMESTAMP)"
-	# We use awk to pretty print. note: nmcli timestamp is unix epoch or 0
-	# actually nmcli timestamp might be a long int. 
-	# Let's just show the Name for simplicity first, maybe UUID as value.
-	
-	# Create a list for gum choose
-	# We replace colons in names to avoid gum parsing issues if we were doing key:value, but simple list is fine.
-	# We'll display just the Names.
-	
-	SELECTED_NAME=$(echo "$SAVED_LIST" | cut -d: -f1 | gum choose --header "Select a profile to manage" --height 15 --cursor.foreground "$COLOR_INFO")
+	DISPLAY_LIST=""
+	while IFS=: read -r name uuid type ts; do
+		if [ -n "$ts" ] && [ "$ts" -gt 0 ] 2>/dev/null; then
+			dt=$(date -d @"$ts" "+%Y-%m-%d %H:%M" 2>/dev/null)
+			DISPLAY_LIST+="$name (Last used: $dt)__UUID__$uuid"$'\n'
+		else
+			DISPLAY_LIST+="$name (Never used)__UUID__$uuid"$'\n'
+		fi
+	done <<< "$SAVED_LIST"
 
-	if [ -z "$SELECTED_NAME" ]; then
+	# Trim trailing newline
+	DISPLAY_LIST="${DISPLAY_LIST%$'\n'}"
+
+	SELECTED_DISPLAY=$(echo "$DISPLAY_LIST" | awk -F '__UUID__' '{print $1}' | gum choose --header "Select a profile to manage" --height 15 --cursor.foreground "$COLOR_INFO")
+
+	if [ -z "$SELECTED_DISPLAY" ]; then
 		exit 0
 	fi
 
-	# Get UUID for the selected name (handle duplicates by picking most recent? nmcli sort should help)
-	# We'll just pick the first one matching the name
-	UUID=$(echo "$SAVED_LIST" | grep "^$SELECTED_NAME:" | head -n1 | cut -d: -f2)
+	UUID=$(echo "$DISPLAY_LIST" | grep -F "$SELECTED_DISPLAY__UUID__" | awk -F '__UUID__' '{print $2}' | head -n1)
+	SELECTED_NAME=$(echo "$SELECTED_DISPLAY" | sed 's/ (.*//')
 
 	# Actions
 	ACTION=$(gum choose "Show Password" "Forget/Delete" "Cancel" --header "Action for '$SELECTED_NAME'")
@@ -312,65 +409,40 @@ manage_saved() {
 	elif [ "$ACTION" == "Show Password" ]; then
 		# Retrieve details
 		PASS=$(nmcli -s -g 802-11-wireless-security.psk connection show "$UUID" 2>/dev/null)
-		SSID=$(nmcli -g 802-11-wireless.ssid connection show "$UUID")
+		SSID=$(nmcli -g 802-11-wireless.ssid connection show "$UUID" 2>/dev/null)
 		
-		if [ -n "$PASS" ]; then
-			# Generate QR if possible
-			if command -v qrencode &> /dev/null && [ -n "$SSID" ]; then
-				gum style --foreground 252 "QR Code for '$SSID':"
-				qrencode -t ANSIUTF8 "WIFI:S:$SSID;T:WPA;P:$PASS;;"
-				echo
-			fi
-			
-			gum style --border normal --padding "0 1" --border-foreground "$COLOR_SUCCESS" "Password: $PASS"
-		else
-			log_error "Could not retrieve password (permissions?)"
+		if [ -z "$PASS" ]; then
+			log_warn "Warning: Could not retrieve WiFi password. You may need to run this command with 'sudo'."
 		fi
+		
+		show_qr_code "$SSID" "$PASS"
 	fi
 }
 
 share_wifi() {
-	gum style --border normal --margin "1" --padding "1 2" --border-foreground "$COLOR_INFO" "Share WiFi"
+	print_header "Share WiFi"
 
 	# Check for active connection
-	ACTIVE=$(nmcli -t -f NAME connection show --active | head -n1)
+	ACTIVE=$(nmcli -t -f NAME,TYPE connection show --active | grep -E ':(802-11-wireless|wifi)$' | cut -d: -f1 | head -n1)
 	if [ -z "$ACTIVE" ]; then
-		log_error "Not connected to any network."
+		log_error "Not connected to any wireless network."
 		exit 1
 	fi
 
 	# Attempt to retrieve credentials
 	log_info "Retrieving credentials for '$ACTIVE'..."
 	SECRETS=$(nmcli -s -g 802-11-wireless-security.psk connection show "$ACTIVE" 2>/dev/null)
-	SSID=$(nmcli -g 802-11-wireless.ssid connection show "$ACTIVE")
+	SSID=$(nmcli -g 802-11-wireless.ssid connection show "$ACTIVE" 2>/dev/null)
 
-	# Mode 1: Custom Layout using qrencode (Preferred for "Password Below")
-	if command -v qrencode &> /dev/null && [ -n "$SECRETS" ]; then
-		# Generate QR
-        # WPA format: WIFI:S:MySSID;T:WPA;P:MyPass;;
-        qrencode -t ANSIUTF8 "WIFI:S:$SSID;T:WPA;P:$SECRETS;;"
-		
-		# Show Password Below
-		echo
-		gum style --border normal --padding "0 1" --border-foreground "$COLOR_SUCCESS" "Password: $SECRETS"
-		
-	# Mode 2: Native nmcli QR (Fallback)
-	# This usually puts password above, but it's a solid fallback if qrencode is missing or secrets hidden.
-	elif nmcli device wifi show-password &> /dev/null; then
-		nmcli device wifi show-password
-		
-	else
-		log_error "Could not generate QR code."
-		log_info "Ensure 'qrencode' is installed or you have permission to view connection secrets."
-		if [ -z "$SECRETS" ]; then
-			log_info "Hint: 'nmcli' could not retrieve the password."
-		fi
-		exit 1
+	if [ -z "$SECRETS" ]; then
+		log_warn "Warning: Could not retrieve WiFi password. You may need to run this command with 'sudo'."
 	fi
+
+	show_qr_code "$SSID" "$SECRETS"
 }
 
 run_speedtest() {
-	gum style --border normal --margin "1" --padding "1 2" --border-foreground "$COLOR_INFO" "Speed Test"
+	print_header "Speed Test"
 
 	# Check if speedtest-cli is installed
 	if ! command -v speedtest-cli &> /dev/null; then
@@ -402,13 +474,13 @@ run_speedtest() {
 	echo # Newline after progress dots
 
 	# Parse Output
-	CLIENT=$(grep "Testing from" "$TMP_SPEED" | sed 's/Testing from //')
+	CLIENT=$(grep "Testing from" "$TMP_SPEED" | sed 's/^Testing from //; s/\.\.\.$//')
 	SERVER_LINE=$(grep "Hosted by" "$TMP_SPEED")
-	SERVER=$(echo "$SERVER_LINE" | cut -d: -f1 | sed 's/Hosted by //')
-	PING=$(echo "$SERVER_LINE" | cut -d: -f2 | xargs)
+	SERVER=$(echo "$SERVER_LINE" | sed 's/^Hosted by //; s/: .*//')
+	PING=$(echo "$SERVER_LINE" | sed 's/.*: //')
 	
-	DOWNLOAD=$(grep "Download:" "$TMP_SPEED" | cut -d: -f2 | xargs)
-	UPLOAD=$(grep "Upload:" "$TMP_SPEED" | cut -d: -f2 | xargs)
+	DOWNLOAD=$(grep "Download:" "$TMP_SPEED" | sed 's/^Download: //')
+	UPLOAD=$(grep "Upload:" "$TMP_SPEED" | sed 's/^Upload: //')
 	
 	rm "$TMP_SPEED"
 
@@ -429,7 +501,7 @@ run_speedtest() {
 }
 
 toggle_radio() {
-	gum style --border normal --margin "1" --padding "1 2" --border-foreground "$COLOR_INFO" "WiFi Radio"
+	print_header "WiFi Radio"
 
 	STATUS=$(nmcli radio wifi)
 	log_info "Current status: $STATUS"
@@ -486,7 +558,7 @@ disconnect_wifi() {
 	SIGNAL=$(echo "$WIFI_INFO" | cut -d: -f3)
 	RATE=$(echo "$WIFI_INFO" | cut -d: -f4)
 
-	gum style --border normal --margin "1" --padding "1 2" --border-foreground "$COLOR_WARN" "Disconnect Network"
+	print_header "Disconnect Network" "$COLOR_WARN"
 
 	# Present Details using gum style
 	gum style \
