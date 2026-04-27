@@ -4,10 +4,8 @@ set -euo pipefail
 # --- 1. Dependency check & auto-install ---
 
 check_dependencies() {
-	detect_os
-
-	if [ "$OS" == "macos" ]; then
-		echo "macOS is not supported because it does not use nmcli."
+	if [[ "$OSTYPE" == "darwin"* ]]; then
+		echo "macOS is not supported because it relies on Linux-based nmcli."
 		exit 1
 	fi
 
@@ -63,18 +61,7 @@ check_dependencies() {
 	esac
 }
 
-detect_os() {
-	if [ -f /etc/os-release ];
-	then
-		. /etc/os-release
-		OS=$ID
-	elif [[ "$OSTYPE" == "darwin"* ]];
-	then
-		OS="macos"
-	else
-		OS="unknown"
-	fi
-}
+
 
 install_package() {
 	PACKAGE=${1:-}
@@ -269,6 +256,8 @@ connect_wifi() {
 
 	# Extract SSID and security
 	# BSSID is $1, SSID is $2
+	# Note: Splitting by ' | ' handles standard names, but if an SSID contains a literal '|'
+	# this slice mapping may incorrectly fracture the output line values.
 	RAW_BSSID=$(echo "$SELECTED" | awk -F ' \\| ' '{ print $1 }' || true)
 	BSSID=$(echo "$RAW_BSSID" | xargs || true)
 	
@@ -642,7 +631,7 @@ disconnect_wifi() {
 
 	# Get Signal and Rate from wifi list (more reliable than device show for some versions)
 	# Output format: *:SSID:SIGNAL:RATE
-	WIFI_INFO=$(nmcli -t -f IN-USE,SSID,SIGNAL,RATE device wifi list | grep '^\*' | head -n1 || true)
+	WIFI_INFO=$(nmcli -t -f IN-USE,SSID,SIGNAL,RATE device wifi list | grep -E '^\s*\*' | head -n1 || true)
 	SIGNAL=$(echo "$WIFI_INFO" | cut -d: -f3)
 	RATE=$(echo "$WIFI_INFO" | cut -d: -f4)
 
