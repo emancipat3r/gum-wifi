@@ -235,38 +235,52 @@ connect_wifi() {
 
 	# Define Header
 	# Must match awk printf below:
-	# %-17.17s | %-25.25s | %-8.8s | %-3.3s | %-9.9s | %-3.3s | %-5.5s | %s
+	# %-17.17s | %-32.32s | %-8.8s | %-3.3s | %-3.3s | %-5.5s | %s
 	# We add 2 spaces padding at the start to account for the 'gum choose' cursor
-	HEADER="  BSSID             | SSID                      | MODE     | CH  | RATE      | SIG | BARS  | SECURITY"
+	HEADER="  BSSID             | SSID                             | MODE     | CH  | SIG | BARS  | SECURITY"
 
 	# Scan
-	# Added BSSID to fields.
-	SCAN_OUTPUT=$(gum spin --title "Scanning for networks..." --show-output -- nmcli --terse --fields BSSID,SSID,MODE,CHAN,RATE,SIGNAL,BARS,SECURITY device wifi list --rescan yes | \
-		sed 's/\\:/__COLON__/g' | sed 's/:/ | /g' | sed 's/__COLON__/:/g' | \
-		awk -F ' \\| ' '{ printf "%-17.17s | %-25.25s | %-8.8s | %-3.3s | %-9.9s | %-3.3s | %-5.5s | %s\n", $1, $2, $3, $4, $5, $6, $7, $8 }')
+	# nmcli -t -e yes escapes ':' as '\:' and '\' as '\\'.
+	# Format assumption: Awk splits on all colons. We reconstruct fields that were split at an escaped colon
+	# by checking for a trailing backslash, removing it, and appending the next field. Then we unescape any backslashes.
+	SCAN_OUTPUT=$(gum spin --title "Scanning for networks..." --show-output -- nmcli -t -e yes --fields BSSID,SSID,MODE,CHAN,SIGNAL,BARS,SECURITY device wifi list --rescan yes | \
+		awk -F':' '{
+			n=0
+			for(i=1; i<=NF; i++) {
+				val = $i
+				while(val ~ /\\$/ && i<NF) {
+					sub(/\\$/, "", val)
+					i++
+					val = val ":" $i
+				}
+				gsub(/\\\\/, "\\", val)
+				f[++n] = val
+			}
+			printf "%-17.17s | %-32.32s | %-8.8s | %-3.3s | %-3.3s | %-5.5s | %s\n", f[1], f[2], f[3], f[4], f[5], f[6], f[7]
+		}' || true)
 
 	if [ -z "$SCAN_OUTPUT" ];
 	then
 		log_error "No networks found or scanning failed..."
-		exit 1
+		return 1
 	fi
 
 	# Select
-	SELECTED=$(echo "$SCAN_OUTPUT" | gum choose --header "$HEADER" --height 15 --cursor.foreground "$COLOR_INFO")
+	SELECTED=$(echo "$SCAN_OUTPUT" | gum choose --header "$HEADER" --height 15 --cursor.foreground "$COLOR_INFO" || true)
 
 	if [ -z "$SELECTED" ];
 	then
 		log_info "Selection cancelled."
-		exit 0
+		return 0
 	fi
 
 	# Extract SSID and security
 	# BSSID is $1, SSID is $2
-	RAW_BSSID=$(echo "$SELECTED" | awk -F ' \\| ' '{ print $1 }')
-	BSSID=$(echo "$RAW_BSSID" | xargs)
+	RAW_BSSID=$(echo "$SELECTED" | awk -F ' \\| ' '{ print $1 }' || true)
+	BSSID=$(echo "$RAW_BSSID" | xargs || true)
 	
-	RAW_SSID=$(echo "$SELECTED" | awk -F ' \\| ' '{ print $2 }')
-	SSID=$(echo "$RAW_SSID" | xargs) # Trim whitespace
+	RAW_SSID=$(echo "$SELECTED" | awk -F ' \\| ' '{ print $2 }' || true)
+	SSID=$(echo "$RAW_SSID" | xargs || true) # Trim whitespace
 	
 	# Determine Target and Display Name
 	# If SSID is empty, we connect via BSSID initially
@@ -280,9 +294,9 @@ connect_wifi() {
 		DISPLAY_NAME="$SSID"
 	fi
 	
-	# Security is now $8
-	RAW_SECURITY=$(echo "$SELECTED" | awk -F ' \\| ' '{ print $8 }')
-	SECURITY=$(echo "$RAW_SECURITY" | xargs)
+	# Security is now $7 since we removed RATE
+	RAW_SECURITY=$(echo "$SELECTED" | awk -F ' \\| ' '{ print $7 }' || true)
+	SECURITY=$(echo "$RAW_SECURITY" | xargs || true)
 
 	# Try connecting using existing profile (or open network)
 	# This avoids unreliable "check profile exists" logic.
