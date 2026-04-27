@@ -346,13 +346,69 @@ connect_wifi() {
 	fi
 }
 
+# check_captive_portal handles post-connection connectivity status.
+# It implements a three-tier flow:
+# 1. CAPPORT API (RFC 8908): Attempt silent metadata fetch via advertised endpoint (nmcli / DHCP)
+# 2. CAPPORT Prompt: If supported, displays session details directly and launches the true portal URL.
+# 3. Fallback Prompt: If CAPPORT fails or is missing, fall back to triggering an intercept via http://neverssl.com.
 check_captive_portal() {
 	gum spin --title "Verifying internet connectivity..." -- sleep 2
 
 	STATE=$(nmcli networking connectivity)
 
-	if [[ "$STATE" == "portal" ]] || [[ "$STATE" == "limited" ]];
-	then
+	if [[ "$STATE" == "portal" ]] || [[ "$STATE" == "limited" ]]; then
+		# 1. Try CAPPORT first, silently.
+		CAPPORT_URL=$(nmcli -g GENERAL.CAPTIVE-PORTAL device show 2>/dev/null | grep -iE '^https?://' | head -n1 || true)
+		if [ -z "$CAPPORT_URL" ]; then
+			CAPPORT_URL=$(grep -i 'capport\|option_114' /var/lib/NetworkManager/*.lease 2>/dev/null | grep -ioE 'https?://[^ "]+' | head -n1 || true)
+		fi
+
+		if [ -n "$CAPPORT_URL" ]; then
+			# 2. Fetch the CAPPORT JSON
+			CAPPORT_JSON=$(curl -fsSL --max-time 5 -H 'Accept: application/captive+json' "$CAPPORT_URL" 2>/dev/null || true)
+			if [ -n "$CAPPORT_JSON" ]; then
+				if command -v jq >/dev/null 2>&1; then
+					IS_CAPTIVE=$(echo "$CAPPORT_JSON" | jq -r '.captive // empty' 2>/dev/null || true)
+					USER_PORTAL_URL=$(echo "$CAPPORT_JSON" | jq -r '."user-portal-url" // empty' 2>/dev/null || true)
+					SEC_REMAIN=$(echo "$CAPPORT_JSON" | jq -r '."seconds-remaining" // empty' 2>/dev/null || true)
+					BYTES_REMAIN=$(echo "$CAPPORT_JSON" | jq -r '."bytes-remaining" // empty' 2>/dev/null || true)
+				else
+					IS_CAPTIVE=$(echo "$CAPPORT_JSON" | grep -o '"captive"[[:space:]]*:[[:space:]]*\(true\|false\)' | awk -F'[: ]+' '{print $2}' || true)
+					USER_PORTAL_URL=$(echo "$CAPPORT_JSON" | grep -o '"user-portal-url"[[:space:]]*:[[:space:]]*"[^"]*"' | cut -d'"' -f4 || true)
+					SEC_REMAIN=$(echo "$CAPPORT_JSON" | grep -o '"seconds-remaining"[[:space:]]*:[[:space:]]*[0-9]*' | awk -F':' '{print $2}' | tr -d ' ' || true)
+					BYTES_REMAIN=$(echo "$CAPPORT_JSON" | grep -o '"bytes-remaining"[[:space:]]*:[[:space:]]*[0-9]*' | awk -F':' '{print $2}' | tr -d ' ' || true)
+				fi
+				
+				if [ "$IS_CAPTIVE" == "false" ]; then
+					STATE=$(nmcli networking connectivity)
+					if [[ "$STATE" == "full" ]]; then
+						log_success "Internet is fully accessible."
+						return 0
+					fi
+				elif [ "$IS_CAPTIVE" == "true" ] && [ -n "$USER_PORTAL_URL" ] && [ "$USER_PORTAL_URL" != "null" ]; then
+					# 3. CAPPORT is active, we have a portal URL
+					gum style --foreground "$COLOR_WARN" --border double --padding "1 2" "CAPPORT portal detected..."
+					
+					log_info "Portal URL: $USER_PORTAL_URL"
+					if [ -n "$SEC_REMAIN" ] && [ "$SEC_REMAIN" != "null" ]; then
+						log_info "Seconds remaining: $SEC_REMAIN"
+					fi
+					if [ -n "$BYTES_REMAIN" ] && [ "$BYTES_REMAIN" != "null" ]; then
+						log_info "Bytes remaining: $BYTES_REMAIN"
+					fi
+					
+					if gum confirm "Open browser to login?"; then
+						gum style --italic "Opening $USER_PORTAL_URL to access captive portal..."
+						xdg-open "$USER_PORTAL_URL" 2>/dev/null &
+					else
+						log_info "Skipping browser launch."
+					fi
+					return 0
+				fi
+			fi
+		fi
+
+		# 4. Existing fallback unchanged
 		gum style --foreground "$COLOR_WARN" --border double --padding "1 2" "Captive portal detected..."
 
 		if gum confirm "Open browser to login?";
