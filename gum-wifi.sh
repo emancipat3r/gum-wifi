@@ -133,14 +133,10 @@ gpgkey=https://repo.charm.sh/yum/gpg.key' | sudo tee /etc/yum.repos.d/charm.repo
 				return
 				;;
 			zypper)
-				echo '[charm]
-name=Charm
-baseurl=https://repo.charm.sh/yum/
-enabled=1
-gpgcheck=1
-gpgkey=https://repo.charm.sh/yum/gpg.key' | sudo tee /etc/zypp/repos.d/charm.repo
-				sudo zypper install -y gum
-				return
+				echo "Charm does not provide an official zypper repository."
+				echo "Please install gum manually using instructions at:"
+				echo "  https://github.com/charmbracelet/gum"
+				exit 1
 				;;
 			apk)
 				# gum is in Alpine community repos
@@ -241,10 +237,14 @@ connect_wifi() {
 			n=0
 			for(i=1; i<=NF; i++) {
 				val = $i
-				while(val ~ /\\$/ && i<NF) {
-					sub(/\\$/, "", val)
-					i++
-					val = val ":" $i
+				while(i<NF) {
+					c=0; len=length(val)
+					while(len>0 && substr(val,len,1)=="\\"){c++; len--}
+					if(c%2==1) {
+						val = substr(val, 1, length(val)-1)
+						i++
+						val = val ":" $i
+					} else { break }
 				}
 				gsub(/\\\\/, "\\", val)
 				f[++n] = val
@@ -338,11 +338,14 @@ connect_wifi() {
 			return 1
 		fi
 		
+		trap 'nmcli connection delete "$TMP_PROFILE" >/dev/null 2>&1 || true' INT TERM EXIT
 		if gum spin --title "Connecting to $DISPLAY_NAME..." -- nmcli connection up "$TMP_PROFILE"; then
+			trap - INT TERM EXIT
 			log_success "Connected to $DISPLAY_NAME"
 			check_captive_portal
 			return 0
 		else
+			trap - INT TERM EXIT
 			nmcli connection delete "$TMP_PROFILE" >/dev/null 2>&1 || true
 			log_error "Failed to connect."
 			return 1
@@ -410,7 +413,7 @@ manage_saved() {
 		return 0
 	fi
 
-	UUID=$(echo "$DISPLAY_LIST" | grep -F "$SELECTED_DISPLAY__UUID__" | awk -F '__UUID__' '{print $2}' | head -n1 || true)
+	UUID=$(echo "$DISPLAY_LIST" | grep -F "${SELECTED_DISPLAY}__UUID__" | awk -F '__UUID__' '{print $2}' | head -n1 || true)
 	SELECTED_NAME=$(echo "$SELECTED_DISPLAY" | sed 's/ (.*//')
 
 	# Actions
@@ -426,8 +429,8 @@ manage_saved() {
 		fi
 	elif [ "$ACTION" == "Show Password" ]; then
 		# Retrieve details
-		PASS=$(nmcli -s -g 802-11-wireless-security.psk connection show "$UUID" 2>/dev/null)
-		SSID=$(nmcli -g 802-11-wireless.ssid connection show "$UUID" 2>/dev/null)
+		PASS=$(nmcli -s -g 802-11-wireless-security.psk connection show "$UUID" 2>/dev/null || true)
+		SSID=$(nmcli -g 802-11-wireless.ssid connection show "$UUID" 2>/dev/null || true)
 		
 		if [ -z "$PASS" ]; then
 			log_warn "Warning: Could not retrieve WiFi password. You may need to run this command with 'sudo'."
@@ -455,8 +458,8 @@ share_wifi() {
 
 	# Attempt to retrieve credentials
 	log_info "Retrieving credentials for '$ACTIVE'..."
-	SECRETS=$(nmcli -s -g 802-11-wireless-security.psk connection show "$ACTIVE" 2>/dev/null)
-	SSID=$(nmcli -g 802-11-wireless.ssid connection show "$ACTIVE" 2>/dev/null)
+	SECRETS=$(nmcli -s -g 802-11-wireless-security.psk connection show "$ACTIVE" 2>/dev/null || true)
+	SSID=$(nmcli -g 802-11-wireless.ssid connection show "$ACTIVE" 2>/dev/null || true)
 
 	if [ -z "$SECRETS" ]; then
 		log_warn "Warning: Could not retrieve WiFi password. You may need to run this command with 'sudo'."
@@ -486,10 +489,18 @@ run_speedtest() {
 			CLIENT=$(jq -r '.isp' "$TMP_SPEED" || true)
 			SERVER=$(jq -r '.server.name' "$TMP_SPEED" || true)
 			PING=$(jq -r '.ping.latency' "$TMP_SPEED" | sed 's/$/ ms/' || true)
-			DOWNLOAD_VAL=$(jq -r '.download.bandwidth' "$TMP_SPEED" || true)
-			DOWNLOAD=$(awk "BEGIN {printf \"%.2f Mbit/s\", $DOWNLOAD_VAL * 8 / 1000000}" || true)
-			UPLOAD_VAL=$(jq -r '.upload.bandwidth' "$TMP_SPEED" || true)
-			UPLOAD=$(awk "BEGIN {printf \"%.2f Mbit/s\", $UPLOAD_VAL * 8 / 1000000}" || true)
+			DOWNLOAD_VAL=$(jq -r '.download.bandwidth // empty' "$TMP_SPEED" || true)
+			if [ -n "$DOWNLOAD_VAL" ] && [ "$DOWNLOAD_VAL" != "null" ]; then
+				DOWNLOAD=$(awk "BEGIN {printf \"%.2f Mbit/s\", $DOWNLOAD_VAL * 8 / 1000000}" || true)
+			else
+				DOWNLOAD=""
+			fi
+			UPLOAD_VAL=$(jq -r '.upload.bandwidth // empty' "$TMP_SPEED" || true)
+			if [ -n "$UPLOAD_VAL" ] && [ "$UPLOAD_VAL" != "null" ]; then
+				UPLOAD=$(awk "BEGIN {printf \"%.2f Mbit/s\", $UPLOAD_VAL * 8 / 1000000}" || true)
+			else
+				UPLOAD=""
+			fi
 			rm "$TMP_SPEED"
 		else
 			TMP_SPEED=$(mktemp)
@@ -691,7 +702,7 @@ case "${1:-}" in
 		;;
 	*)
 		show_help
-		return 1
+		exit 1
 		;;
 esac
 exit $?
