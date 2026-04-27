@@ -180,24 +180,17 @@ print_header() {
 	gum style --border normal --margin "1" --padding "1 2" --border-foreground "$color" "$1"
 }
 
-show_qr_code() {
-	local SSID="$1"
-	local PASS="$2"
-	
-	if command -v qrencode &> /dev/null && [ -n "$PASS" ]; then
-		gum style --foreground 252 "QR Code for '$SSID':"
-		qrencode -t ANSIUTF8 "WIFI:S:$SSID;T:WPA;P:$PASS;;"
-		echo
-		gum style --border normal --padding "0 1" --border-foreground "$COLOR_SUCCESS" "Password: $PASS"
-	elif nmcli device wifi show-password &> /dev/null; then
-		nmcli device wifi show-password
-	else
-		if [ -n "$PASS" ]; then
-			gum style --border normal --padding "0 1" --border-foreground "$COLOR_SUCCESS" "Password: $PASS"
-		else
-			log_warn "No password found or missing permissions to view it."
-		fi
-	fi
+print_wifi_qr() {
+    local ssid="$1"
+    local password="$2"
+    if command -v qrencode &>/dev/null && [ -n "$password" ]; then
+        gum style --foreground 252 "QR Code for '$ssid':"
+        qrencode -t ANSIUTF8 "WIFI:S:${ssid};T:WPA;P:${password};;"
+        echo
+        gum style --border normal --padding "0 1" --border-foreground "$COLOR_SUCCESS" "Password: $password"
+        return 0
+    fi
+    return 1
 }
 
 # --- 3. Main Logic ---
@@ -440,7 +433,13 @@ manage_saved() {
 			log_warn "Warning: Could not retrieve WiFi password. You may need to run this command with 'sudo'."
 		fi
 		
-		show_qr_code "$SSID" "$PASS"
+		if gum confirm --default=false "Reveal password? (will be printed to terminal)"; then
+			if ! print_wifi_qr "$SSID" "$PASS"; then
+				log_error "Could not generate QR code. (qrencode missing or password empty)"
+			fi
+		else
+			log_info "Password not revealed."
+		fi
 	fi
 }
 
@@ -463,7 +462,13 @@ share_wifi() {
 		log_warn "Warning: Could not retrieve WiFi password. You may need to run this command with 'sudo'."
 	fi
 
-	show_qr_code "$SSID" "$SECRETS"
+	if gum confirm --default=false "Reveal password? (will be printed to terminal)"; then
+		if ! print_wifi_qr "$SSID" "$SECRETS"; then
+			log_error "Could not generate QR code."
+		fi
+	else
+		log_info "Password not revealed."
+	fi
 }
 
 run_speedtest() {
