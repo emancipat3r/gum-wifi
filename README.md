@@ -11,12 +11,12 @@ A beautiful, interactive WiFi manager for the command line, built with [Gum](htt
 - **Hidden Network Support**: Easily connect to hidden networks, including auto-connect for saved profiles.
 - **Captive Portal Check**: automatically detects if you're behind a captive portal.
 - **Disconnect Manager**: View current connection details (Signal, Rate, IP) before disconnecting.
-- **Cross-Platform**: Works on Linux (NetworkManager) and supports dependency detection for macOS (experimental).
+- **Linux-First**: Designed for Linux (NetworkManager), with limited experimental macOS detection in the dependency installer.
 
 ## Prerequisites
 
 - **Bash**
-- **NetworkManager** (`nmcli`): Standard on most Linux distributions (Ubuntu, Fedora, Arch, etc.).
+- **NetworkManager** (`nmcli`): Strictly required. Standard on most Linux distributions (Ubuntu, Fedora, Arch, etc.). Note: macOS is not fully supported because it lacks `nmcli`.
 - **Gum**: The script checks and offers to install it, or you can install it manually:
   
   ```bash
@@ -29,6 +29,7 @@ A beautiful, interactive WiFi manager for the command line, built with [Gum](htt
   sudo pacman -S gum
 
   # macOS
+  # (Note: The script currently only runs its core features on Linux with NetworkManager)
   brew install gum
   ```
 
