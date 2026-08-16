@@ -10,3 +10,6 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Build output
+/gum-wifi
