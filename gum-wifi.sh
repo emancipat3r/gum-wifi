@@ -205,6 +205,18 @@ show_help() {
 	echo
 }
 
+# Attempt a connection via nmcli. Pass "true" as the third argument for hidden
+# networks with a known SSID: 'hidden yes' makes NetworkManager actively probe
+# for the SSID instead of waiting for a beacon that will never come.
+try_connect() {
+	local target="$1" display="$2" hidden="${3:-false}"
+	if [ "$hidden" = true ]; then
+		gum spin --title "Connecting to $display..." -- nmcli device wifi connect "$target" hidden yes
+	else
+		gum spin --title "Connecting to $display..." -- nmcli device wifi connect "$target"
+	fi
+}
+
 connect_wifi() {
 	# Title
 	print_header "WiFi Manager: Connect"
@@ -246,7 +258,10 @@ connect_wifi() {
 	fi
 
 	# Select
-	SELECTED=$(echo "$SCAN_OUTPUT" | gum choose --header "$HEADER" --height 15 --cursor.foreground "$COLOR_INFO" || true)
+	# A hidden network that isn't beaconing won't appear in the scan at all,
+	# so offer a manual entry point alongside the scan results.
+	HIDDEN_OPTION="[ Connect to hidden network... ]"
+	SELECTED=$(printf '%s\n%s\n' "$SCAN_OUTPUT" "$HIDDEN_OPTION" | gum choose --header "$HEADER" --height 15 --cursor.foreground "$COLOR_INFO" || true)
 
 	if [ -z "$SELECTED" ];
 	then
@@ -254,54 +269,82 @@ connect_wifi() {
 		return 0
 	fi
 
-	# Extract SSID and security
-	# BSSID is $1, SSID is $2
-	# Note: Splitting by ' | ' handles standard names, but if an SSID contains a literal '|'
-	# this slice mapping may incorrectly fracture the output line values.
-	RAW_BSSID=$(echo "$SELECTED" | awk -F ' \\| ' '{ print $1 }' || true)
-	BSSID=$(echo "$RAW_BSSID" | xargs || true)
-	
-	RAW_SSID=$(echo "$SELECTED" | awk -F ' \\| ' '{ print $2 }' || true)
-	SSID=$(echo "$RAW_SSID" | xargs || true) # Trim whitespace
-	
-	# Determine Target and Display Name
-	# If SSID is empty, we connect via BSSID initially
-	if [ -z "$SSID" ]; then
+	if [ "$SELECTED" = "$HIDDEN_OPTION" ]; then
+		SSID=$(gum input --placeholder "Enter Hidden Network Name (SSID)" --cursor.foreground "$COLOR_INFO" || true)
+		if [ -z "$SSID" ]; then
+			log_info "No SSID entered."
+			return 0
+		fi
+
+		BSSID=""
 		IS_HIDDEN=true
-		TARGET="$BSSID"
-		DISPLAY_NAME="$BSSID (Hidden)"
-	else
-		IS_HIDDEN=false
 		TARGET="$SSID"
-		DISPLAY_NAME="$SSID"
+		DISPLAY_NAME="$SSID (Hidden)"
+
+		SECURITY=$(gum choose "WPA/WPA2 Personal" "WPA3 Personal (SAE)" "Open" --header "Security type for '$SSID'" || true)
+		if [ -z "$SECURITY" ]; then
+			log_info "Selection cancelled."
+			return 0
+		fi
+		if [ "$SECURITY" = "Open" ]; then
+			SECURITY=""
+		fi
+	else
+		# Extract SSID and security
+		# BSSID is $1, SSID is $2
+		# Note: Splitting by ' | ' handles standard names, but if an SSID contains a literal '|'
+		# this slice mapping may incorrectly fracture the output line values.
+		RAW_BSSID=$(echo "$SELECTED" | awk -F ' \\| ' '{ print $1 }' || true)
+		BSSID=$(echo "$RAW_BSSID" | xargs || true)
+
+		RAW_SSID=$(echo "$SELECTED" | awk -F ' \\| ' '{ print $2 }' || true)
+		SSID=$(echo "$RAW_SSID" | xargs || true) # Trim whitespace
+
+		# Determine Target and Display Name
+		# If SSID is empty, we connect via BSSID initially
+		if [ -z "$SSID" ]; then
+			IS_HIDDEN=true
+			TARGET="$BSSID"
+			DISPLAY_NAME="$BSSID (Hidden)"
+		else
+			IS_HIDDEN=false
+			TARGET="$SSID"
+			DISPLAY_NAME="$SSID"
+		fi
+
+		# Security is now $7 since we removed RATE
+		RAW_SECURITY=$(echo "$SELECTED" | awk -F ' \\| ' '{ print $7 }' || true)
+		SECURITY=$(echo "$RAW_SECURITY" | xargs || true)
 	fi
-	
-	# Security is now $7 since we removed RATE
-	RAW_SECURITY=$(echo "$SELECTED" | awk -F ' \\| ' '{ print $7 }' || true)
-	SECURITY=$(echo "$RAW_SECURITY" | xargs || true)
 
 	# Try connecting using existing profile (or open network)
 	# This avoids unreliable "check profile exists" logic.
 	# If profile exists (under any name), nmcli finds it by SSID.
 	# If no profile or wrong password, this fails, and we catch it below.
-	if gum spin --title "Connecting to $DISPLAY_NAME..." -- nmcli device wifi connect "$TARGET"; then
+	# Hidden with no SSID yet means we're targeting a BSSID, so no probing.
+	if [ -n "$SSID" ]; then
+		HIDDEN_ATTEMPT="$IS_HIDDEN"
+	else
+		HIDDEN_ATTEMPT=false
+	fi
+	if try_connect "$TARGET" "$DISPLAY_NAME" "$HIDDEN_ATTEMPT"; then
 		log_success "Connected to $DISPLAY_NAME"
 		check_captive_portal
 		return 0
 	fi
 
 	# If failed and it was hidden, prompt user for SSID to retry
-	if [ "$IS_HIDDEN" = true ]; then
+	if [ "$IS_HIDDEN" = true ] && [ -z "$SSID" ]; then
 		log_info "Hidden network connection failed."
-		HIDDEN_SSID=$(gum input --placeholder "Enter Hidden Network Name (SSID) to retry" --cursor.foreground "$COLOR_INFO")
-		
+		HIDDEN_SSID=$(gum input --placeholder "Enter Hidden Network Name (SSID) to retry" --cursor.foreground "$COLOR_INFO" || true)
+
 		if [ -n "$HIDDEN_SSID" ]; then
 			SSID="$HIDDEN_SSID"
 			TARGET="$SSID"
 			DISPLAY_NAME="$SSID (Hidden)"
-			
+
 			# Retry with new Target
-			if gum spin --title "Connecting to $DISPLAY_NAME..." -- nmcli device wifi connect "$TARGET"; then
+			if try_connect "$TARGET" "$DISPLAY_NAME" true; then
 				log_success "Connected to $DISPLAY_NAME"
 				check_captive_portal
 				return 0
@@ -311,18 +354,40 @@ connect_wifi() {
 
 	# If failed, and network is secured, ask for password
 	if [[ "$SECURITY" != "OPEN" ]] && [[ -n "$SECURITY" ]]; then
+		# A profile needs a real SSID; for a hidden network the user may have
+		# declined to enter one above.
+		if [ -z "$SSID" ]; then
+			log_error "Cannot create a connection profile without an SSID."
+			return 1
+		fi
+
 		log_info "Password required."
-		PASSWORD=$(gum input --password --placeholder "Enter password for $DISPLAY_NAME" --cursor.foreground "$COLOR_INFO")
-		
+		PASSWORD=$(gum input --password --placeholder "Enter password for $DISPLAY_NAME" --cursor.foreground "$COLOR_INFO" || true)
+
 		if [ -z "$PASSWORD" ]; then
 			log_info "No password provided."
 			return 1
 		fi
-		
+
+		# WPA3-only networks require SAE; WPA2/WPA3 transition mode still
+		# works (and is more compatible) with wpa-psk.
+		KEY_MGMT="wpa-psk"
+		if [[ "$SECURITY" == *"WPA3"* || "$SECURITY" == *"SAE"* ]] && [[ "$SECURITY" != *"WPA2"* ]]; then
+			KEY_MGMT="sae"
+		fi
+
+		# hidden=yes makes NetworkManager probe for the SSID, both for this
+		# connection and for autoconnect after reboot/wake.
+		HIDDEN_FLAG="no"
+		if [ "$IS_HIDDEN" = true ]; then
+			HIDDEN_FLAG="yes"
+		fi
+
 		# Retry with provided password via secure temporary profile
 		TMP_PROFILE="gumwifi-$(date +%s)"
 		if ! nmcli connection add type wifi con-name "$TMP_PROFILE" ifname '*' ssid "$SSID" \
-			-- wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$PASSWORD" >/dev/null; then
+			-- wifi-sec.key-mgmt "$KEY_MGMT" wifi-sec.psk "$PASSWORD" \
+			802-11-wireless.hidden "$HIDDEN_FLAG" >/dev/null; then
 			log_error "Failed to create connection profile."
 			return 1
 		fi
