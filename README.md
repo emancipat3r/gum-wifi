@@ -1,101 +1,69 @@
-# Gum WiFi Manager
+# gum-wifi
 
-A beautiful, interactive WiFi manager for the command line, built with [Gum](https://github.com/charmbracelet/gum) and `nmcli`.
+A WiFi manager TUI for Linux, built with [Bubble Tea](https://github.com/charmbracelet/bubbletea) on top of NetworkManager's D-Bus API.
 
 ![License: GPLv3](https://img.shields.io/badge/License-GPLv3-blue.svg)
 
 ## Features
 
-- **Interactive Selection**: Scans available networks and presents them in a sortable, filterable list.
-- **Stylish UI**: Uses Charmbracelet's `gum` for modern, colorful borders, spinners, and inputs.
-- **Hidden Network Support**: Easily connect to hidden networks, including auto-connect for saved profiles.
-- **Captive Portal Check**: automatically detects if you're behind a captive portal.
-- **Disconnect Manager**: View current connection details (Signal, Rate, IP) before disconnecting.
-- **Linux-First**: Designed for Linux (NetworkManager), with limited experimental macOS detection in the dependency installer.
+- **Live network list** — scans refresh in place every few seconds; one row per SSID (strongest AP kept), with in-use marker, color-coded signal bars, band, security, and saved-profile indicators.
+- **First-class hidden network support** — connect by SSID even when nothing is beaconing (`h`). Profiles are created with `802-11-wireless.hidden`, so NetworkManager probes for the SSID and autoconnect works across reboots.
+- **WPA3** — SAE key management is detected from the AP's RSN flags and selected automatically; override with `tab` in the password prompt.
+- **Clean failure handling** — a wrong password deletes the half-created profile, so retries start fresh and no junk profiles accumulate.
+- **Saved profile management** (`s`) — every stored profile with last-used time, autoconnect flag, and in-range status. Connect, change the password in place (preserving the profile's other settings), toggle autoconnect, reveal the stored password, or forget it.
+- **Status at a glance** — active SSID (whitespace-only names shown quoted), connectivity state (captive portal / limited / offline), and interface details: name, MAC, IP, gateway, link rate.
 
 ## Prerequisites
 
-- **Bash**
-- **NetworkManager** (`nmcli`): Strictly required. Standard on most Linux distributions (Ubuntu, Fedora, Arch, etc.). Note: macOS is not fully supported because it lacks `nmcli`.
-- **Gum**: The script checks and offers to install it, or you can install it manually:
-  
-  ```bash
-  # Debian/Ubuntu
-  sudo mkdir -p /etc/apt/keyrings
-  curl -fsSL https://repo.charm.sh/apt/gpg.key | sudo gpg --dearmor -o /etc/apt/sources.list.d/charm.list
-  sudo apt update && sudo apt install gum
-
-  # Arch/Manjaro
-  sudo pacman -S gum
-
-  # macOS
-  # (Note: The script currently only runs its core features on Linux with NetworkManager)
-  brew install gum
-  ```
+- Linux with **NetworkManager** running (talks D-Bus directly — `nmcli` is not needed)
+- **Go 1.22+** to build
 
 ## Installation
 
-1. Clone the repository:
-   ```bash
-   git clone git@github.com:emancipat3r/gum-wifi.git
-   cd gum-wifi
-   ```
-
-2. Make the script executable:
-   ```bash
-   chmod +x gum-wifi.sh
-   ```
-
-3. (Optional) Symlink to your path:
-   ```bash
-   sudo ln -s $(pwd)/gum-wifi.sh /usr/local/bin/gum-wifi
-   ```
+```bash
+git clone git@github.com:emancipat3r/gum-wifi.git
+cd gum-wifi
+go build -o gum-wifi ./cmd/gum-wifi
+# optional:
+install -Dm755 gum-wifi ~/.local/bin/gum-wifi
+```
 
 ## Usage
 
-### Connect to a Network
-```bash
-./gum-wifi.sh connect
-```
-Scans for networks and opens the selection menu. If you select a secure network, it prompts for a password. If you select a hidden network (blank SSID), it attempts to auto-connect or prompts for the SSID.
+Run `gum-wifi`. Everything is keyboard-driven:
 
-### Disconnect
-```bash
-./gum-wifi.sh disconnect
-```
-Shows details about your current connection (SSID, Signal Strength, IP Address) and asks for confirmation before disconnecting.
+**Network list**
 
-### Saved Networks
-```bash
-./gum-wifi.sh saved
-```
-List all saved WiFi profiles. You can select one to detail (show QR code & password) or forget/delete it.
+| Key | Action |
+|-----|--------|
+| `↑`/`↓` | move selection |
+| `enter` | connect (uses saved profile / prompts for password as needed) |
+| `d` | disconnect |
+| `h` | connect to a hidden network by SSID |
+| `s` | saved profiles screen |
+| `f` | forget the selected network's saved profile |
+| `r` | rescan |
+| `q` | quit |
 
-### Share WiFi (QR Code)
-```bash
-./gum-wifi.sh share
-```
-Generates a QR code for your current connection. Friends can scan it to join instantly!
-It also displays the plaintext password for easy sharing.
+**Saved profiles**
 
-### Speed Test
-```bash
-./gum-wifi.sh speed
-```
-Runs a simple internet speed test. It will prompt to install `speedtest-cli` if missing. Displays detailed client, server, and speed stats.
+| Key | Action |
+|-----|--------|
+| `enter` | connect with stored secrets |
+| `p` | change password (updated in place, then verified by connecting) |
+| `a` | toggle autoconnect |
+| `w` | reveal stored password (may require polkit auth) |
+| `f` | forget profile |
+| `esc` | back |
 
-### Radio Toggle
-```bash
-./gum-wifi.sh radio
-```
-Quickly enable or disable the WiFi hardware.
+**Password prompt**: `enter` connect · `tab` toggle WPA2-PSK/WPA3-SAE · `esc` cancel.
 
+## Roadmap
 
-### Help
-```bash
-./gum-wifi.sh --help
-```
+- Captive portal detection helper (open portal URL in browser)
+- QR code sharing for the current network
+- 802.1X enterprise networks
 
 ## License
 
-This project is licensed under the GNU General Public License v3.0 - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the GNU General Public License v3.0 — see the [LICENSE](LICENSE) file for details.
